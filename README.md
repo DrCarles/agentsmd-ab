@@ -3,7 +3,7 @@
 # 🧪 agentsmd-ab
 
 **Does your `AGENTS.md` actually change what a coding agent builds?**<br>
-Run two Claude Code agents side by side, one with your `AGENTS.md` and one without, and compare the results.
+Run two Claude Code agents side by side with different instructions, such as an `AGENTS.md` against none or a full checklist against a reduced one, and compare the results.
 
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-2ea44f)
@@ -21,7 +21,7 @@ Run two Claude Code agents side by side, one with your `AGENTS.md` and one witho
 
 | | |
 |---|---|
-| 🅰️🅱️ **Controlled comparison** | The two agents share the same image, Claude Code version, model, prompts and project. The only difference is the `AGENTS.md`. |
+| 🅰️🅱️ **Controlled comparison** | The two agents share the same image, Claude Code version, model, prompts and project. The only difference is what you put in their agent folders. |
 | 🐳 **Isolated sandboxes** | Each agent runs in its own Docker container on its own network. No host folders are mounted. |
 | 🗂️ **Agent folders** | Give each agent its own `.claude/` folder (AGENTS.md, skills, settings, ...) from `inputs/agent_a` and `inputs/agent_b`. |
 | 🆕 **New or existing projects** | Start from an empty folder, or copy an existing codebase into both workspaces. |
@@ -33,10 +33,10 @@ Run two Claude Code agents side by side, one with your `AGENTS.md` and one witho
 ## 🔍 How it works
 
 <p align="center">
-  <img src="docs/architecture.svg" alt="The same prompt goes to two isolated containers running Claude Code; only container A gets the AGENTS.md. Both produce metrics, transcripts and workspaces, which are scanned with Trivy and compared." width="100%">
+  <img src="docs/architecture.svg" alt="The same prompt goes to two isolated containers running Claude Code; each also gets its own agent folder (AGENTS.md, skills, ...). Both produce metrics, transcripts and workspaces, which are scanned with Trivy and compared." width="100%">
 </p>
 
-Agent A gets the `AGENTS.md` in its workspace root, which is how it is used in real projects. Agent B gets the exact same workspace without it.
+Each agent gets the same project plus its own agent folder, with its `.claude/AGENTS.md`, skills and so on, in the place where Claude Code reads them in real projects. Put something different in each folder and compare what the agents produce.
 
 ## 🚀 Quick start
 
@@ -48,7 +48,7 @@ Agent A gets the `AGENTS.md` in its workspace root, which is how it is used in r
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ```
 
-**2. Run the example** from [inputs/](inputs/): agent A gets a secure-coding [AGENTS.md](inputs/agent_a/.claude/AGENTS.md) and both agents get a FastAPI development prompt.
+**2. Run the example** from [inputs/](inputs/). Agent A gets a [secure-coding checklist](inputs/agent_a/.claude/AGENTS.md), agent B gets an empty AGENTS.md, and both get the same FastAPI development prompt.
 
 ```bash
 python agentsmd_tester.py --mode new --prompt-file inputs/1.develop.md --model opus
@@ -57,7 +57,7 @@ python agentsmd_tester.py --mode new --prompt-file inputs/1.develop.md --model o
 **3. Evaluate.** When both agents finish, use the menu to send an evaluation prompt, copy the workspaces and run a Trivy scan.
 
 > [!TIP]
-> Running `python agentsmd_tester.py` with no arguments is fully interactive. It asks for the use case, the project, the AGENTS.md and the prompt.
+> Running `python agentsmd_tester.py` with no arguments is fully interactive. It asks for the use case, the project and the prompt, and uses the agent folders in `inputs/`.
 
 <details>
 <summary>🔑 <b>Other credential options</b></summary>
@@ -85,16 +85,25 @@ inputs/
 ├── 1.develop.md                    prompt
 ├── agent_a/                        → copied into agent A's /workspace
 │   └── .claude/
-│       ├── AGENTS.md               instructions under test
+│       ├── AGENTS.md               full secure-coding checklist
 │       ├── skills/<name>/SKILL.md  project skills (optional)
 │       └── settings.json, ...      anything else Claude Code reads from .claude/
-└── agent_b/                        → copied into agent B's /workspace (baseline)
+└── agent_b/                        → copied into agent B's /workspace
     └── .claude/
+        └── AGENTS.md               empty: no instructions
 ```
 
+Common comparisons:
+
+| Compare | Agent A folder | Agent B folder |
+|---|---|---|
+| AGENTS.md against none | `.claude/AGENTS.md` | empty |
+| Two AGENTS.md versions | `.claude/AGENTS.md` (v1) | `.claude/AGENTS.md` (v2) |
+| A skill's effect | AGENTS.md + `.claude/skills/x/` | same AGENTS.md, no skill |
+
 - `inputs/agent_a` and `inputs/agent_b` are used by default when they exist. Use `--agent-a-dir` / `--agent-b-dir` to point at other folders, or `--no-agent-dirs` to ignore them.
-- `--agents-md FILE` still works. It puts the file at the root of A's workspace and is optional when A's folder already has an AGENTS.md.
-- To test an AGENTS.md alone, leave `agent_b/.claude/` empty. To test skills or settings, give both agents the same AGENTS.md and change only the skills or settings in one folder.
+- `--agents-md FILE` still works. It puts the file at the root of agent A's workspace and is optional when A's folder already has an AGENTS.md.
+- At start-up the script shows which AGENTS.md each agent gets, and warns if both folders are identical.
 - `.gitkeep` files are not copied. A copy of both folders is saved in each run under `runs/<run>/inputs/`.
 
 > [!TIP]
@@ -113,15 +122,15 @@ inputs/
 A session looks like this:
 
 ```text
-=== Round 1: sending prompt to Agent A (with AGENTS.md) and Agent B (baseline, no AGENTS.md) ===
-[A with AGENTS.md] session started - model claude-opus-5-5
-[B baseline      ] session started - model claude-opus-5-5
-[A with AGENTS.md] > Write: /workspace/requirements.txt
-[B baseline      ] > Write: /workspace/main.py
-[A with AGENTS.md] > Bash: pip install -r requirements.txt
+=== Round 1: sending prompt to Agent A and Agent B ===
+[Agent A] session started - model claude-opus-5-5
+[Agent B] session started - model claude-opus-5-5
+[Agent A] > Write: /workspace/requirements.txt
+[Agent B] > Write: /workspace/main.py
+[Agent A] > Bash: pip install -r requirements.txt
 ...
-[A with AGENTS.md] finished (success) - 41 agent turns, 4.2m, $0.9123
-[B baseline      ] finished (success) - 33 agent turns, 3.1m, $0.6410
+[Agent A] finished (success) - 41 agent turns, 4.2m, $0.9123
+[Agent B] finished (success) - 33 agent turns, 3.1m, $0.6410
 
 What next?
   1) Send a prompt to BOTH agents
@@ -145,13 +154,13 @@ What next?
 After you copy the workspaces, the script offers to scan them with [Trivy](https://trivy.dev). Trivy runs from the pinned `aquasec/trivy` Docker image, so you don't need to install it. Each workspace is mounted **read-only**, and the vulnerability database is cached in a Docker volume.
 
 ```text
-Workspace                  Kind               CRITICAL  HIGH  MEDIUM  LOW  UNKNOWN  Total
-agent_a_with_agents_md     Vulnerabilities    0         0     0       0    0        0
-agent_a_with_agents_md     Secrets            0         0     0       0    0        0
-agent_a_with_agents_md     Misconfigurations  0         0     0       0    0        0
-agent_b_without_agents_md  Vulnerabilities    0         4     4       1    0        9
-agent_b_without_agents_md  Secrets            1         0     0       0    0        1
-agent_b_without_agents_md  Misconfigurations  0         1     0       1    0        2
+Workspace  Kind               CRITICAL  HIGH  MEDIUM  LOW  UNKNOWN  Total
+agent_a    Vulnerabilities    0         0     0       0    0        0
+agent_a    Secrets            0         0     0       0    0        0
+agent_a    Misconfigurations  0         0     0       0    0        0
+agent_b    Vulnerabilities    0         4     4       1    0        9
+agent_b    Secrets            1         0     0       0    0        1
+agent_b    Misconfigurations  0         1     0       1    0        2
 ```
 
 | Scanner | Finds |
@@ -183,8 +192,8 @@ runs/20261120-105014/
 │   ├── transcript.md             readable transcript (prompts, tool calls, responses)
 │   └── turn_NN.jsonl             raw Claude Code stream-json events
 └── workspaces/after_round_NN/
-    ├── agent_a_with_agents_md/
-    ├── agent_b_without_agents_md/
+    ├── agent_a/
+    ├── agent_b/
     └── trivy/                    JSON report per workspace + summary.md
 ```
 
@@ -208,7 +217,7 @@ runs/20261120-105014/
 | `--max-turns N` | limit agentic turns per prompt |
 | `--exclude NAME` | extra file/dir name not copied in (`node_modules`, `.venv`, `__pycache__`, ... are always skipped) |
 | `--keep-instruction-files` | keep the project's own CLAUDE.md / nested AGENTS.md files in both copies (a root or `.claude/` AGENTS.md is always removed) |
-| `--claude-md-bridge auto\|always\|never` | add `@AGENTS.md` to A's root CLAUDE.md (see below) |
+| `--claude-md-bridge auto\|always\|never` | add `@AGENTS.md` to each agent's root CLAUDE.md (see below) |
 | `--memory 4g --cpus 2` | resource limits per container |
 | `--keep-containers` | keep the containers after exit (`docker exec -it <name> bash`) |
 | `--quiet` · `--no-color` | don't stream live activity · plain output |
@@ -220,14 +229,14 @@ runs/20261120-105014/
 </details>
 
 <details>
-<summary><b>How AGENTS.md reaches agent A</b></summary>
+<summary><b>How AGENTS.md reaches the agents</b></summary>
 <br>
 
-Recent Claude Code versions read `AGENTS.md` and `.claude/AGENTS.md` natively when a project has **no** `CLAUDE.md`. Agent A gets the file from its agent folder (usually `.claude/AGENTS.md`) or from `--agents-md` (workspace root), with nothing else added.
+Recent Claude Code versions read `AGENTS.md` and `.claude/AGENTS.md` natively when a project has **no** `CLAUDE.md`. Each agent gets the file from its agent folder (usually `.claude/AGENTS.md`), and agent A can also get one from `--agents-md` (workspace root). Nothing else is added.
 
-When copying an existing project, the script removes every `AGENTS.md`, `CLAUDE.md` and `CLAUDE.local.md` from **both** copies, so neither agent sees other instructions. With `--keep-instruction-files`, those files are kept in both copies, except a root or `.claude/` AGENTS.md, which is always removed so it can't reach agent B. Agent folders are copied after the project, so their files replace project files with the same path.
+When copying an existing project, the script removes every `AGENTS.md`, `CLAUDE.md` and `CLAUDE.local.md` from **both** copies, so the only instructions are the ones in the agent folders. With `--keep-instruction-files`, those files are kept in both copies, except a root or `.claude/` AGENTS.md, which is always removed so it can't override the agent folders. Agent folders are copied after the project, so their files replace project files with the same path.
 
-A CLAUDE.md in A's workspace, kept from the project or coming from A's folder, would stop Claude Code from loading AGENTS.md. In that case the script adds an import (`@AGENTS.md` or `@.claude/AGENTS.md`) to A's root CLAUDE.md. `--claude-md-bridge always|never` overrides this.
+A CLAUDE.md in an agent's workspace, kept from the project or coming from its folder, would stop Claude Code from loading AGENTS.md. In that case the script adds an import (`@AGENTS.md` or `@.claude/AGENTS.md`) to that agent's root CLAUDE.md. `--claude-md-bridge always|never` overrides this.
 
 > [!CAUTION]
 > If the project is a git repository and those files are committed, an agent could still find them through git history. The script warns you when this applies.

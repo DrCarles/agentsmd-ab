@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""A/B test the effect of an AGENTS.md file on Claude Code agents.
+"""A/B test agent instructions (AGENTS.md, skills, ...) on Claude Code agents.
 
-Two Claude Code agents run side by side, each in its own Docker container:
-
-  * Agent A gets the AGENTS.md under test in its workspace.
-  * Agent B (baseline) gets the exact same workspace without it.
+Two Claude Code agents run side by side, each in its own Docker container, on
+the same project. They differ only by their agent folders (inputs/agent_a and
+inputs/agent_b by default), which are copied into their workspaces: e.g. an
+AGENTS.md vs none, or a full vs a reduced AGENTS.md.
 
 Both receive the same prompt. Afterwards you can send follow-up prompts
 (typically evaluation questions) to both agents or to one of them, then copy
@@ -755,7 +755,7 @@ class Run:
     removed_instruction_files: list[str] = field(default_factory=list)
     exported_after_round: int = -1
     rounds: int = 0
-    bridge_used: bool = False
+    bridge_used: list[str] = field(default_factory=list)  # agents whose CLAUDE.md imports AGENTS.md
     last_export: Path | None = None
     trivy_scans: list[dict] = field(default_factory=list)
 
@@ -1018,7 +1018,7 @@ def parse_args() -> argparse.Namespace:
                    help="keep CLAUDE.md / nested AGENTS.md files of the project in BOTH copies "
                         "(AGENTS.md and .claude/AGENTS.md at the root are always removed)")
     p.add_argument("--claude-md-bridge", choices=["auto", "always", "never"], default="auto",
-                   help="add '@AGENTS.md' to a root CLAUDE.md in agent A's workspace. Claude Code "
+                   help="add '@AGENTS.md' to a root CLAUDE.md in each agent's workspace. Claude Code "
                         "loads AGENTS.md natively only when the project has no CLAUDE.md, so "
                         "'auto' (default) adds it only when a project CLAUDE.md is kept")
     p.add_argument("--memory", help="memory limit per container, e.g. 4g")
@@ -1117,39 +1117,47 @@ def prepare_workspaces(run: Run) -> None:
         if run.agent_dirs.get(key):
             console.print(f"Agent {key.upper()}: {len(files[key])} file(s) from {run.agent_dirs[key]}: "
                           + one_line(", ".join(files[key]) or "(empty)", 120), "dim")
-    a_files = files["a"]
     if run.agents_md:
-        if "AGENTS.md" in a_files:
+        if "AGENTS.md" in files["a"]:
             console.warn(f"--agents-md replaces AGENTS.md from {run.agent_dirs['a']}")
-        a_files["AGENTS.md"] = run.agents_md.read_bytes()
+        files["a"]["AGENTS.md"] = run.agents_md.read_bytes()
 
-    a_md = instruction_files(list(a_files), ("agents.md",))
-    if not a_md:
-        console.warn("Agent A gets no AGENTS.md: A and B only differ by their agent folders.")
-    b_md = instruction_files(list(files["b"]), ("agents.md",))
-    if b_md:
-        console.warn(f"Agent B's folder contains {', '.join(b_md)}: B is not an AGENTS.md-free baseline.")
+    def content(value: bytes | Path) -> bytes:
+        return value.read_bytes() if isinstance(value, Path) else value
 
-    # Claude Code loads AGENTS.md only when the project has no CLAUDE.md. If A's workspace will
-    # contain one (kept from the project or from A's folder), import AGENTS.md from a root CLAUDE.md.
+    # Show which instructions each agent gets, and flag setups that compare nothing.
+    md = {k: instruction_files(list(files[k]), ("agents.md",)) for k in ("a", "b")}
+    for k in ("a", "b"):
+        shown = [p + ("" if content(files[k][p]).strip() else " (empty)") for p in md[k]]
+        console.print(f"Agent {k.upper()} AGENTS.md: {', '.join(shown) or 'none'}", "dim")
+
+    if files["a"].keys() == files["b"].keys() and all(
+            content(files["a"][p]) == content(files["b"][p]) for p in files["a"]):
+        console.warn("Agents A and B get identical files: the comparison only measures run-to-run variance.")
+
+    # Claude Code loads AGENTS.md only when the project has no CLAUDE.md. If an agent's workspace
+    # will contain one (kept from the project or from its folder), import AGENTS.md from a root CLAUDE.md.
     project_claude = (run.project / "CLAUDE.md") if run.project else None
     kept_claude_md = (not strip and run.project is not None
                       and any((run.project / p).is_file() for p in ("CLAUDE.md", ".claude/CLAUDE.md")))
-    has_claude_md = kept_claude_md or bool(instruction_files(list(a_files), ("claude.md", "claude.local.md")))
-    if a_md and (args.claude_md_bridge == "always" or (args.claude_md_bridge == "auto" and has_claude_md)):
-        base = a_files.get("CLAUDE.md")
-        if isinstance(base, Path):
-            base = base.read_bytes()
-        elif base is None and not strip and project_claude and project_claude.is_file():
+    for k in ("a", "b"):
+        has_claude_md = kept_claude_md or bool(instruction_files(list(files[k]), ("claude.md", "claude.local.md")))
+        if not md[k] or not (args.claude_md_bridge == "always"
+                             or (args.claude_md_bridge == "auto" and has_claude_md)):
+            continue
+        base = files[k].get("CLAUDE.md")
+        if base is not None:
+            base = content(base)
+        elif not strip and project_claude and project_claude.is_file():
             base = project_claude.read_bytes()
-        imports = "".join(f"@{p}\n" for p in a_md).encode()
-        a_files["CLAUDE.md"] = (base.rstrip() + b"\n\n" + imports) if base else imports
-        run.bridge_used = True
-        console.print(f"Agent A: root CLAUDE.md imports {', '.join('@' + p for p in a_md)} "
+        imports = "".join(f"@{p}\n" for p in md[k]).encode()
+        files[k]["CLAUDE.md"] = (base.rstrip() + b"\n\n" + imports) if base else imports
+        run.bridge_used.append(k)
+        console.print(f"Agent {k.upper()}: root CLAUDE.md imports {', '.join('@' + p for p in md[k])} "
                       "(bridge enabled).", "dim")
 
     with tempfile.TemporaryDirectory(prefix="agentsmd-") as tmp:
-        for agent, extra in ((run.agent("a"), a_files), (run.agent("b"), files["b"])):
+        for agent, extra in ((run.agent("a"), files["a"]), (run.agent("b"), files["b"])):
             tar_path = Path(tmp) / f"{agent.key}.tar"
             removed = build_workspace_tar(tar_path, run.project, extra, excludes, strip)
             if agent.key == "b":
@@ -1204,9 +1212,9 @@ def main() -> int:
                             ignore=shutil.ignore_patterns(*DEFAULT_COPY_IN_EXCLUDES, *AGENT_DIR_SKIP))
 
     agents = [
-        Agent("a", "A with AGENTS.md", "Agent A (with AGENTS.md)", "agent_a_with_agents_md",
+        Agent("a", "Agent A", "Agent A", "agent_a",
               f"agentsmd-{run_id}-a", f"agentsmd-{run_id}-a-net", run_dir / "agent_a"),
-        Agent("b", "B baseline      ", "Agent B (baseline, no AGENTS.md)", "agent_b_without_agents_md",
+        Agent("b", "Agent B", "Agent B", "agent_b",
               f"agentsmd-{run_id}-b", f"agentsmd-{run_id}-b-net", run_dir / "agent_b"),
     ]
     run = Run(args, console, run_id, run_dir, mode, project, agents_md, agents, agent_dirs)

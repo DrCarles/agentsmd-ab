@@ -38,7 +38,7 @@
   <circle class="num" cx="34" cy="42" r="12"/><text class="n" x="34" y="46">1</text>
   <text class="t" x="80" y="80">Setup</text>
   <text class="s" x="80" y="102">use case, prompt</text>
-  <text class="s" x="80" y="118">and AGENTS.md</text>
+  <text class="s" x="80" y="118">and agent folders</text>
   <path class="wire" d="M150 76 H170" marker-end="url(#tip)"/>
 
   <!-- 2 -->
