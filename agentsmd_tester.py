@@ -426,6 +426,124 @@ def export_workspace(agent: Agent, dest: Path, skip_heavy: bool) -> tuple[int, l
 
 
 # --------------------------------------------------------------------------- #
+# Trivy scans (Trivy itself runs in a container)
+# --------------------------------------------------------------------------- #
+TRIVY_IMAGE = "aquasec/trivy:0.76.2"
+TRIVY_CACHE_VOLUME = "agentsmd-trivy-cache"  # keeps the vulnerability DB between scans
+TRIVY_KINDS = [("vuln", "Vulnerabilities"), ("secret", "Secrets"), ("misconfig", "Misconfigurations")]
+SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+
+
+def ensure_image(console: Console, image: str) -> None:
+    if docker("image", "inspect", image, check=False).returncode != 0:
+        console.print(f"Pulling {image} ...", "dim")
+        if docker("pull", image, stream=True, check=False).returncode != 0:
+            raise DockerError(f"Could not pull {image}.")
+
+
+def trivy_scan(workspace: Path, args: argparse.Namespace, skip_reports: bool = False) -> bytes:
+    """Scan a host folder (mounted read-only) and return Trivy's JSON report."""
+    source = str(workspace.resolve()).replace('"', '""')
+    cmd = ["docker", "run", "--rm", "-v", f"{TRIVY_CACHE_VOLUME}:/root/.cache",
+           "--mount", f'type=bind,"source={source}",target=/scan,readonly',
+           args.trivy_image, "fs", "--quiet", "--format", "json",
+           "--scanners", args.trivy_scanners]
+    if args.trivy_severity:
+        cmd += ["--severity", args.trivy_severity]
+    if skip_reports:  # the report folder lives inside the scanned folder
+        cmd += ["--skip-dirs", "/scan/trivy"]
+    cmd.append("/scan")
+    res = subprocess.run(cmd, capture_output=True)
+    if res.returncode != 0:
+        raise DockerError(f"Trivy scan of {workspace} failed: "
+                          f"{res.stderr.decode('utf-8', 'replace').strip()[-2000:]}")
+    return res.stdout
+
+
+def trivy_findings(report: dict) -> list[dict]:
+    findings = []
+    for r in report.get("Results") or []:
+        target = r.get("Target", "")
+        for v in r.get("Vulnerabilities") or []:
+            findings.append({"kind": "vuln", "severity": v.get("Severity", "UNKNOWN"),
+                             "id": v.get("VulnerabilityID"), "target": target,
+                             "detail": f"{v.get('PkgName')} {v.get('InstalledVersion')} "
+                                       f"(fixed: {v.get('FixedVersion') or 'none'}) {v.get('Title') or ''}".strip()})
+        for s in r.get("Secrets") or []:
+            findings.append({"kind": "secret", "severity": s.get("Severity", "UNKNOWN"),
+                             "id": s.get("RuleID"), "target": f"{target}:{s.get('StartLine')}",
+                             "detail": s.get("Title") or ""})
+        for m in r.get("Misconfigurations") or []:
+            if m.get("Status", "FAIL") != "FAIL":
+                continue
+            findings.append({"kind": "misconfig", "severity": m.get("Severity", "UNKNOWN"),
+                             "id": m.get("ID") or m.get("AVDID"), "target": target,
+                             "detail": m.get("Title") or ""})
+    order = {s: i for i, s in enumerate(SEVERITIES)}
+    findings.sort(key=lambda f: (order.get(f["severity"], len(SEVERITIES)), f["kind"], f["target"]))
+    return findings
+
+
+def severity_counts(findings: list[dict]) -> dict[str, dict[str, int]]:
+    counts = {kind: {s: 0 for s in SEVERITIES} for kind, _ in TRIVY_KINDS}
+    for f in findings:
+        counts[f["kind"]][f["severity"] if f["severity"] in SEVERITIES else "UNKNOWN"] += 1
+    return counts
+
+
+def scan_workspaces(console: Console, export_dir: Path, args: argparse.Namespace) -> dict:
+    """Scan every agent workspace in an export folder and write reports to <export>/trivy/."""
+    targets = sorted(p for p in export_dir.iterdir() if p.is_dir() and p.name.startswith("agent_"))
+    if not targets:
+        targets = [export_dir]  # a plain folder: scan it as a single workspace
+    report_dir = export_dir / "trivy"
+    report_dir.mkdir(exist_ok=True)
+    ensure_image(console, args.trivy_image)
+
+    console.header(f"Trivy scan ({args.trivy_image}, scanners: {args.trivy_scanners})")
+    results: dict[str, list[dict]] = {}
+    for ws in targets:
+        console.print(f"Scanning {ws.name} ... (the first scan downloads the vulnerability DB)")
+        raw = trivy_scan(ws, args, skip_reports=ws == export_dir)
+        (report_dir / f"{ws.name}.json").write_bytes(raw)
+        results[ws.name] = trivy_findings(json.loads(raw or b"{}"))
+
+    headers = ["Workspace", "Kind", *SEVERITIES, "Total"]
+    rows = []
+    summary: dict[str, dict] = {}
+    for name, findings in results.items():
+        counts = severity_counts(findings)
+        summary[name] = counts
+        for kind, label in TRIVY_KINDS:
+            if kind not in args.trivy_scanners:
+                continue
+            row = counts[kind]
+            rows.append([name, label, *(str(row[s]) for s in SEVERITIES), str(sum(row.values()))])
+
+    table = [headers] + rows
+    widths = [max(len(r[i]) for r in table) for i in range(len(headers))]
+    for i, r in enumerate(table):
+        console.print("  ".join(c.ljust(w) for c, w in zip(r, widths)), "bold" if i == 0 else None)
+
+    md = [f"# Trivy scan of `{export_dir}`", "",
+          f"- Image: `{args.trivy_image}`", f"- Scanners: {args.trivy_scanners}",
+          f"- Severity filter: {args.trivy_severity or 'all'}", "",
+          "| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]
+    md += ["| " + " | ".join(r) + " |" for r in rows]
+    for name, findings in results.items():
+        md += ["", f"## {name} ({len(findings)} findings)", ""]
+        if findings:
+            md += ["| Severity | Kind | ID | Target | Detail |", "|---|---|---|---|---|"]
+            md += [f"| {f['severity']} | {f['kind']} | {f['id']} | `{f['target']}` | "
+                   f"{one_line(f['detail'], 200).replace('|', '/')} |" for f in findings]
+        else:
+            md.append("No findings.")
+    (report_dir / "summary.md").write_text("\n".join(md) + "\n", encoding="utf-8")
+    console.info(f"Trivy reports: {report_dir}")
+    return summary
+
+
+# --------------------------------------------------------------------------- #
 # Running prompts
 # --------------------------------------------------------------------------- #
 def summarize_tool_input(name: str, data: dict) -> str:
@@ -603,6 +721,8 @@ class Run:
     exported_after_round: int = -1
     rounds: int = 0
     bridge_used: bool = False
+    last_export: Path | None = None
+    trivy_scans: list[dict] = field(default_factory=list)
 
     def agent(self, key: str) -> Agent:
         return next(a for a in self.agents if a.key == key)
@@ -617,6 +737,7 @@ class Run:
             "model": self.args.model,
             "claude_md_bridge": self.bridge_used,
             "removed_instruction_files": self.removed_instruction_files,
+            "trivy_scans": self.trivy_scans,
             "agents": {a.key: {"title": a.title, "container": a.container,
                                "session_id": a.session_id, "turns": a.turns}
                        for a in self.agents},
@@ -741,7 +862,25 @@ def export_dialog(run: Run) -> None:
         if len(skipped) > 10:
             console.warn(f"  ... and {len(skipped) - 10} more skipped entries")
     run.exported_after_round = run.rounds
+    run.last_export = dest
     console.info(f"Workspaces copied to {dest} (after {last_turn} turn(s)).")
+    if ask_yes_no("Scan the copied workspaces with Trivy?", True):
+        scan_dialog(run)
+
+
+def scan_dialog(run: Run) -> None:
+    if run.last_export is None or not run.last_export.is_dir():
+        if not ask_yes_no("Nothing has been copied yet. Copy the workspaces now?", True):
+            return
+        export_dialog(run)  # asks to scan at the end
+        return
+    if run.exported_after_round != run.rounds:
+        run.console.warn(f"The last copy ({run.last_export.name}) is older than the latest round; "
+                         "choose 'Copy both workspaces' first to scan the current state.")
+    summary = scan_workspaces(run.console, run.last_export, run.args)
+    run.trivy_scans.append({"export": str(run.last_export), "after_round": run.exported_after_round,
+                            "image": run.args.trivy_image, "counts": summary})
+    run.save()
 
 
 MENU = """
@@ -750,9 +889,10 @@ What next?
   2) Send a prompt to agent A only (with AGENTS.md)
   3) Send a prompt to agent B only (baseline)
   4) Copy both workspaces to the host
-  5) Show results summary
-  6) Show the last responses again
-  7) Show commands to inspect the containers yourself
+  5) Scan the copied workspaces with Trivy
+  6) Show results summary
+  7) Show the last responses again
+  8) Show commands to inspect the containers yourself
   q) Quit (removes the containers)"""
 
 
@@ -776,10 +916,12 @@ def interactive_loop(run: Run) -> None:
             elif choice == "4":
                 export_dialog(run)
             elif choice == "5":
-                run.print_summary()
+                scan_dialog(run)
             elif choice == "6":
-                run.print_last_responses()
+                run.print_summary()
             elif choice == "7":
+                run.print_last_responses()
+            elif choice == "8":
                 for ag in run.agents:
                     console.print(f"{ag.title}:\n  docker exec -it {ag.container} bash\n"
                                   f"  docker exec -it -w {WORKSPACE} {ag.container} claude --resume {ag.session_id or ''}")
@@ -793,6 +935,8 @@ def interactive_loop(run: Run) -> None:
             return
         except KeyboardInterrupt:
             console.print("\n(cancelled)")
+        except DockerError as exc:  # e.g. a failed Trivy scan: keep the session alive
+            console.error(str(exc))
 
 
 # --------------------------------------------------------------------------- #
@@ -807,6 +951,7 @@ def parse_args() -> argparse.Namespace:
               python agentsmd_tester.py                          # fully interactive
               python agentsmd_tester.py --agents-md AGENTS.md --prompt-file task.md
               python agentsmd_tester.py --agents-md AGENTS.md --project ../my-app --model opus
+              python agentsmd_tester.py --scan-only runs/<run>/workspaces/after_round_01
             """))
     p.add_argument("--agents-md", type=Path, help="AGENTS.md under test (given to agent A only)")
     p.add_argument("--mode", choices=["new", "existing"],
@@ -834,6 +979,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--keep-containers", action="store_true", help="do not remove containers on exit")
     p.add_argument("--runs-dir", type=Path, default=ROOT / "runs", help="where run logs are written")
     p.add_argument("--quiet", action="store_true", help="do not stream agent activity live")
+    p.add_argument("--scan-only", type=Path, metavar="DIR",
+                   help="only run a Trivy scan on previously copied workspaces (a folder with "
+                        "agent_* subfolders, or any single folder) and exit")
+    p.add_argument("--trivy-image", default=TRIVY_IMAGE, help=f"Trivy image (default: {TRIVY_IMAGE})")
+    p.add_argument("--trivy-scanners", default="vuln,secret,misconfig",
+                   help="Trivy scanners (default: vuln,secret,misconfig; also: license)")
+    p.add_argument("--trivy-severity", help="only report these severities, e.g. CRITICAL,HIGH")
     p.add_argument("--no-color", action="store_true")
     return p.parse_args()
 
@@ -928,6 +1080,16 @@ def main() -> int:
     except DockerError as exc:
         console.error(str(exc))
         return 1
+    if args.scan_only:
+        if not args.scan_only.is_dir():
+            console.error(f"Not a directory: {args.scan_only}")
+            return 1
+        try:
+            scan_workspaces(console, args.scan_only, args)
+        except DockerError as exc:
+            console.error(str(exc))
+            return 1
+        return 0
     check_credentials(console)
 
     try:

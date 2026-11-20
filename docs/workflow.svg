@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 204" width="960" height="204" role="img" aria-label="Workflow: 1 setup, 2 start two sandboxes, 3 run the same prompt on A and B in parallel, 4 evaluate with follow-up prompts (looping back to run), 5 export both workspaces, 6 scan them with Trivy.">
+  <style>
+    .bg{fill:#ffffff;stroke:#d0d7de;stroke-width:1}
+    .card{fill:#ffffff;stroke:#d0d7de;stroke-width:1.5}
+    .num{fill:#d97757}
+    .n,.t,.s{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;text-anchor:middle}
+    .n{fill:#ffffff;font-size:12px;font-weight:700}
+    .t{fill:#1f2328;font-size:15px;font-weight:600}
+    .s{fill:#59636e;font-size:12px}
+    .loop-label{fill:#b5532f;font-size:12px;font-weight:600}
+    .wire{fill:none;stroke:#8c959f;stroke-width:1.6}
+    .loop{fill:none;stroke:#d97757;stroke-width:1.6;stroke-dasharray:5 4}
+    .tip{fill:#8c959f}
+    .tip-a{fill:#d97757}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#0d1117;stroke:#30363d}
+      .card{fill:#161b22;stroke:#30363d}
+      .num{fill:#e08a68}
+      .n{fill:#0d1117}
+      .t{fill:#e6edf3}
+      .s{fill:#9198a1}
+      .loop-label{fill:#e08a68}
+      .wire{stroke:#6e7681}
+      .loop{stroke:#e08a68}
+      .tip{fill:#6e7681}
+      .tip-a{fill:#e08a68}
+    }
+  </style>
+  <defs>
+    <marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="tip" d="M0,0 L10,5 L0,10 z"/></marker>
+    <marker id="tip-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path class="tip-a" d="M0,0 L10,5 L0,10 z"/></marker>
+  </defs>
+
+  <rect class="bg" x="0.5" y="0.5" width="959" height="203" rx="12"/>
+
+  <!-- 1 -->
+  <rect class="card" x="12" y="20" width="136" height="112" rx="10"/>
+  <circle class="num" cx="34" cy="42" r="12"/><text class="n" x="34" y="46">1</text>
+  <text class="t" x="80" y="80">Setup</text>
+  <text class="s" x="80" y="102">use case, prompt</text>
+  <text class="s" x="80" y="118">and AGENTS.md</text>
+  <path class="wire" d="M150 76 H170" marker-end="url(#tip)"/>
+
+  <!-- 2 -->
+  <rect class="card" x="172" y="20" width="136" height="112" rx="10"/>
+  <circle class="num" cx="194" cy="42" r="12"/><text class="n" x="194" y="46">2</text>
+  <text class="t" x="240" y="80">Sandboxes</text>
+  <text class="s" x="240" y="102">build the image,</text>
+  <text class="s" x="240" y="118">start 2 containers</text>
+  <path class="wire" d="M310 76 H330" marker-end="url(#tip)"/>
+
+  <!-- 3 -->
+  <rect class="card" x="332" y="20" width="136" height="112" rx="10"/>
+  <circle class="num" cx="354" cy="42" r="12"/><text class="n" x="354" y="46">3</text>
+  <text class="t" x="400" y="80">Run</text>
+  <text class="s" x="400" y="102">A &amp; B get the same</text>
+  <text class="s" x="400" y="118">prompt in parallel</text>
+  <path class="wire" d="M470 76 H490" marker-end="url(#tip)"/>
+
+  <!-- 4 -->
+  <rect class="card" x="492" y="20" width="136" height="112" rx="10"/>
+  <circle class="num" cx="514" cy="42" r="12"/><text class="n" x="514" y="46">4</text>
+  <text class="t" x="560" y="80">Evaluate</text>
+  <text class="s" x="560" y="102">answers, metrics</text>
+  <text class="s" x="560" y="118">and transcripts</text>
+  <path class="wire" d="M630 76 H650" marker-end="url(#tip)"/>
+
+  <!-- 5 -->
+  <rect class="card" x="652" y="20" width="136" height="112" rx="10"/>
+  <circle class="num" cx="674" cy="42" r="12"/><text class="n" x="674" y="46">5</text>
+  <text class="t" x="720" y="80">Export</text>
+  <text class="s" x="720" y="102">copy both</text>
+  <text class="s" x="720" y="118">workspaces</text>
+  <path class="wire" d="M790 76 H810" marker-end="url(#tip)"/>
+
+  <!-- 6 -->
+  <rect class="card" x="812" y="20" width="136" height="112" rx="10"/>
+  <circle class="num" cx="834" cy="42" r="12"/><text class="n" x="834" y="46">6</text>
+  <text class="t" x="880" y="80">Scan</text>
+  <text class="s" x="880" y="102">Trivy: A vs B</text>
+  <text class="s" x="880" y="118">by severity</text>
+
+  <!-- follow-up loop: 4 back to 3 -->
+  <path class="loop" d="M560 134 C560 176, 400 176, 400 138" marker-end="url(#tip-a)"/>
+  <text class="t loop-label" x="480" y="192">follow-up prompts</text>
+</svg>

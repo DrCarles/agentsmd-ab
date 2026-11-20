@@ -1,103 +1,213 @@
-# AGENTS.md A/B tester
+<div align="center">
 
-Measures the effect of an `AGENTS.md` file on Claude Code. It runs two Claude Code agents side by side in isolated Docker containers and sends them the same prompts:
+# 🧪 agentsmd-ab
 
-| Agent | Workspace |
+**Does your `AGENTS.md` actually change what a coding agent builds?**<br>
+Run two Claude Code agents side by side, one with your `AGENTS.md` and one without, and compare the results.
+
+![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
+![Dependencies](https://img.shields.io/badge/dependencies-stdlib%20only-2ea44f)
+![Docker](https://img.shields.io/badge/sandbox-Docker-2496ED?logo=docker&logoColor=white)
+![Claude Code](https://img.shields.io/badge/agent-Claude%20Code-D97757?logo=anthropic&logoColor=white)
+![Trivy](https://img.shields.io/badge/security%20scan-Trivy-1904DA)
+
+[How it works](#-how-it-works) · [Quick start](#-quick-start) · [Workflow](#-workflow) · [Security scan](#-security-scan-with-trivy) · [Output](#-output) · [Options](#%EF%B8%8F-options)
+
+</div>
+
+---
+
+## ✨ Features
+
+| | |
 |---|---|
-| **A** | the project (or an empty folder) **plus the AGENTS.md under test** |
-| **B** (baseline) | the same project, **without** AGENTS.md |
+| 🅰️🅱️ **Controlled comparison** | The two agents share the same image, Claude Code version, model, prompts and project. The only difference is the `AGENTS.md`. |
+| 🐳 **Isolated sandboxes** | Each agent runs in its own Docker container on its own network. No host folders are mounted. |
+| 🆕 **New or existing projects** | Start from an empty folder, or copy an existing codebase into both workspaces. |
+| 💬 **Follow-up prompts** | Send evaluation questions to both agents or to one of them. Each agent continues its own conversation. |
+| 📦 **Workspace export** | Copy both workspaces to your machine to inspect or diff them. |
+| 🛡️ **Trivy scans** | Find vulnerable dependencies, hard-coded secrets and misconfigurations, with A and B compared by severity. |
+| 📊 **Metrics & transcripts** | See wall time, agent turns, tool calls, tokens and cost per prompt, plus full transcripts. |
 
-Both containers use the same image, Claude Code version, model and prompts. The only difference between them is the AGENTS.md file.
+## 🔍 How it works
 
-## Requirements
+<p align="center">
+  <img src="docs/architecture.svg" alt="The same prompt goes to two isolated containers running Claude Code; only container A gets the AGENTS.md. Both produce metrics, transcripts and workspaces, which are scanned with Trivy and compared." width="100%">
+</p>
 
-- Docker (Docker Desktop on Windows/macOS) running
-- Python 3.12+ (standard library only)
-- Credentials in the git-ignored `.env/` folder (see below)
+Agent A gets the `AGENTS.md` in its workspace root, which is how it is used in real projects. Agent B gets the exact same workspace without it.
 
-## Credentials (`.env/`)
+## 🚀 Quick start
 
-Use one of these:
+**Requirements:** Docker running (Docker Desktop on Windows/macOS) and Python 3.12+. No pip packages are needed.
 
-1. **Recommended: a long-lived token.** Run `claude setup-token` on your machine, then create `.env/claude.env`:
-   ```
-   CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
-   ```
-   You can also use `ANTHROPIC_API_KEY=...`. The file is passed to both containers with `docker run --env-file`. When it defines a token, `.env/.credentials.json` is ignored.
-2. **`.env/.credentials.json`**: a copy of `~/.claude/.credentials.json` taken after `claude login`.
+**1. Add credentials.** Run `claude setup-token`, then create `.env/claude.env`:
 
-   OAuth refresh tokens can be used only once. The script refreshes the token once before the agents start, keeps the newest credentials in sync between the containers, and writes them back to `.env/.credentials.json`.
+```env
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
+```
 
-   If this file was copied from your own `~/.claude`, the token rotation can log out the Claude Code install on your machine, or the reverse can happen. Option 1 avoids that.
-
-`.env/`, `*.env` and `runs/` are listed in `.gitignore`.
-
-## Usage
+**2. Run the example** from [inputs/](inputs/): a secure-coding [AGENTS.md](inputs/AGENTS.md) and a FastAPI development prompt.
 
 ```bash
-python agentsmd_tester.py                     # fully interactive
-python agentsmd_tester.py --agents-md path/to/AGENTS.md --prompt-file task.md          # start from scratch
-python agentsmd_tester.py --agents-md path/to/AGENTS.md --project ../my-app --model opus # edit an existing project
+python agentsmd_tester.py --mode new --agents-md inputs/AGENTS.md --prompt-file inputs/1.develop.md --model opus
 ```
 
-### Example
+**3. Evaluate.** When both agents finish, use the menu to send an evaluation prompt, copy the workspaces and run a Trivy scan.
 
-[inputs/](inputs/) has sample inputs: a secure-coding [AGENTS.md](inputs/AGENTS.md) and a development prompt.
+> [!TIP]
+> Running `python agentsmd_tester.py` with no arguments is fully interactive. It asks for the use case, the project, the AGENTS.md and the prompt.
+
+<details>
+<summary>🔑 <b>Other credential options</b></summary>
+<br>
+
+| File | Contents | Notes |
+|---|---|---|
+| `.env/claude.env` | `CLAUDE_CODE_OAUTH_TOKEN=...` or `ANTHROPIC_API_KEY=...` | **Recommended.** Passed to both containers with `--env-file`. |
+| `.env/.credentials.json` | copy of `~/.claude/.credentials.json` after `claude login` | Used only when `claude.env` defines no token. |
+
+OAuth refresh tokens can be used only once. When `.credentials.json` is used, the script refreshes the token once before the agents start, keeps the newest credentials in sync between the containers, and writes them back to the file.
+
+> [!WARNING]
+> If `.credentials.json` was copied from your own `~/.claude`, the token rotation can log out the Claude Code install on your machine. A `setup-token` token avoids this.
+
+`.env/`, `*.env` and `runs/` are git-ignored.
+</details>
+
+## 🔄 Workflow
+
+<p align="center">
+  <img src="docs/workflow.svg" alt="Workflow: setup, start two sandboxes, run the same prompt on A and B, evaluate with follow-up prompts, export both workspaces, scan them with Trivy." width="100%">
+</p>
+
+- **New project:** both workspaces start empty.
+- **Existing project:** the project is copied into both workspaces, without any AGENTS.md or CLAUDE.md of its own.
+- After each round a menu lets you send follow-up prompts (to both agents, A or B), copy the workspaces, run a Trivy scan or quit. Quitting removes the containers.
+
+A session looks like this:
+
+```text
+=== Round 1: sending prompt to Agent A (with AGENTS.md) and Agent B (baseline, no AGENTS.md) ===
+[A with AGENTS.md] session started - model claude-opus-5-5
+[B baseline      ] session started - model claude-opus-5-5
+[A with AGENTS.md] > Write: /workspace/requirements.txt
+[B baseline      ] > Write: /workspace/main.py
+[A with AGENTS.md] > Bash: pip install -r requirements.txt
+...
+[A with AGENTS.md] finished (success) - 41 agent turns, 4.2m, $0.9123
+[B baseline      ] finished (success) - 33 agent turns, 3.1m, $0.6410
+
+What next?
+  1) Send a prompt to BOTH agents
+  2) Send a prompt to agent A only (with AGENTS.md)
+  3) Send a prompt to agent B only (baseline)
+  4) Copy both workspaces to the host
+  5) Scan the copied workspaces with Trivy
+  6) Show results summary
+  7) Show the last responses again
+  8) Show commands to inspect the containers yourself
+  q) Quit (removes the containers)
+```
+
+<sub>Numbers are illustrative.</sub>
+
+> [!NOTE]
+> Prompts can span several lines: finish with a line containing only `.`, or type `@path/to/prompt.md` to load a file. Press **Ctrl+C** during a round to stop both agents. Their sessions are kept, so you can send another prompt afterwards.
+
+## 🛡️ Security scan with Trivy
+
+After you copy the workspaces, the script offers to scan them with [Trivy](https://trivy.dev). Trivy runs from the pinned `aquasec/trivy` Docker image, so you don't need to install it. Each workspace is mounted **read-only**, and the vulnerability database is cached in a Docker volume.
+
+```text
+Workspace                  Kind               CRITICAL  HIGH  MEDIUM  LOW  UNKNOWN  Total
+agent_a_with_agents_md     Vulnerabilities    0         0     0       0    0        0
+agent_a_with_agents_md     Secrets            0         0     0       0    0        0
+agent_a_with_agents_md     Misconfigurations  0         0     0       0    0        0
+agent_b_without_agents_md  Vulnerabilities    0         4     4       1    0        9
+agent_b_without_agents_md  Secrets            1         0     0       0    0        1
+agent_b_without_agents_md  Misconfigurations  0         1     0       1    0        2
+```
+
+| Scanner | Finds |
+|---|---|
+| `vuln` | vulnerable dependencies in `requirements.txt`, `package-lock.json`, `poetry.lock`, `go.sum`, ... |
+| `secret` | hard-coded tokens, keys and passwords |
+| `misconfig` | issues in Dockerfiles, Kubernetes manifests, Terraform and similar files |
+
+To scan workspaces from an earlier run (no credentials needed):
 
 ```bash
-python agentsmd_tester.py --mode new --agents-md inputs/AGENTS.md --prompt-file inputs/1.develop.md
-# when both agents finish: menu option 1, then type your evaluation prompt (or @path/to/prompt.md)
+python agentsmd_tester.py --scan-only runs/<run>/workspaces/after_round_01
 ```
 
-The script:
+> [!IMPORTANT]
+> Trivy finds dependency vulnerabilities only when versions are **pinned**, in a lockfile or with `==` in `requirements.txt`. "0 vulnerabilities" can also mean "nothing to check".
 
-1. Asks for the use case if it isn't given:
-   - **new**: empty workspace
-   - **existing**: copies `--project` into both workspaces
-2. Asks for the AGENTS.md under test and the initial prompt. Prompts are multi-line: end with a line containing only `.`, or type `@file.md` to load one from a file.
-3. Builds the `agentsmd-tester` image from [docker/Dockerfile](docker/Dockerfile) and starts two containers, each on its own Docker network.
-4. Copies the workspaces in and sends the prompt to both agents in parallel. Each agent runs `claude -p --dangerously-skip-permissions` in `/workspace`, and both agents' activity is streamed live.
-5. Opens a menu where you can:
-   - send follow-up prompts (evaluation questions, for example) to both agents or to one of them. Each agent continues its own conversation through `--resume`.
-   - copy both workspaces to the host for manual inspection
-   - view a summary of time, agent turns, tool calls, tokens and cost
-6. Removes the containers when you quit. Unless the current workspaces were already copied, it first offers to copy them.
+## 📁 Output
 
-Press Ctrl+C during a round to stop both agents. Their sessions are kept, so you can send another prompt afterwards.
+Everything is saved under `runs/<timestamp>/`:
 
-## Output (`runs/<timestamp>/`)
-
-```
-AGENTS.under-test.md        copy of the tested file
-prompts.md                  every prompt sent, per round
-run.json / summary.md       per-turn metrics and final responses
-agent_a/ agent_b/
-  transcript.md             readable transcript (prompts, tool calls, responses)
-  turn_NN.jsonl             raw Claude Code stream-json events
-workspaces/after_round_NN/
-  agent_a_with_agents_md/
-  agent_b_without_agents_md/
+```text
+runs/20261120-105014/
+├── AGENTS.under-test.md          copy of the tested file
+├── prompts.md                    every prompt sent, per round
+├── run.json · summary.md         per-turn metrics, final responses, Trivy counts
+├── agent_a/ · agent_b/
+│   ├── transcript.md             readable transcript (prompts, tool calls, responses)
+│   └── turn_NN.jsonl             raw Claude Code stream-json events
+└── workspaces/after_round_NN/
+    ├── agent_a_with_agents_md/
+    ├── agent_b_without_agents_md/
+    └── trivy/                    JSON report per workspace + summary.md
 ```
 
-## How AGENTS.md reaches agent A
+## ⚙️ Options
 
-Recent Claude Code versions read `AGENTS.md` natively when a project has **no** `CLAUDE.md`. So agent A only gets `AGENTS.md` in its workspace root, which matches how it is used in practice.
-
-When copying an existing project, the script takes out every `AGENTS.md`, `CLAUDE.md` and `CLAUDE.local.md` file from **both** copies, so neither agent sees other instructions. With `--keep-instruction-files`, those files are kept in both copies. The root AGENTS.md is still replaced for A and removed for B. A kept root CLAUDE.md would stop Claude Code from loading AGENTS.md, so in that case `@AGENTS.md` is added to A's CLAUDE.md. `--claude-md-bridge always|never` overrides this.
-
-If the project is a git repository and those files are committed, an agent could still find them through git. The script warns you when this applies.
-
-## Useful options
+<details>
+<summary><b>All options</b></summary>
+<br>
 
 | Option | Purpose |
 |---|---|
+| `--agents-md PATH` | AGENTS.md under test (given to agent A only) |
+| `--mode new\|existing` · `--project DIR` | start from scratch, or copy an existing project into both workspaces |
+| `--prompt TEXT` · `--prompt-file PATH` | initial prompt |
 | `--model opus` | pin the model for both agents (recommended for reproducibility) |
 | `--claude-version 2.1.329` | pin the Claude Code version in the image |
+| `--rebuild` | rebuild the image without cache |
 | `--timeout 30` | per-prompt timeout in minutes |
 | `--max-turns N` | limit agentic turns per prompt |
-| `--exclude NAME` | extra file/dir name not copied into the workspaces (`node_modules`, `.venv`, `__pycache__`, ... are always skipped) |
+| `--exclude NAME` | extra file/dir name not copied in (`node_modules`, `.venv`, `__pycache__`, ... are always skipped) |
+| `--keep-instruction-files` | keep the project's own CLAUDE.md / nested AGENTS.md files in both copies |
+| `--claude-md-bridge auto\|always\|never` | add `@AGENTS.md` to A's root CLAUDE.md (see below) |
 | `--memory 4g --cpus 2` | resource limits per container |
 | `--keep-containers` | keep the containers after exit (`docker exec -it <name> bash`) |
-| `--quiet` | don't stream live activity |
+| `--quiet` · `--no-color` | don't stream live activity · plain output |
+| `--scan-only DIR` | only scan previously copied workspaces with Trivy, then exit |
+| `--trivy-scanners vuln,secret,misconfig,license` | choose Trivy scanners |
+| `--trivy-severity CRITICAL,HIGH` | only report these severities |
+| `--trivy-image aquasec/trivy:0.76.2` | Trivy image (pinned by default) |
 
-Add any toolchains your projects need (Go, Rust, Java, ...) to [docker/Dockerfile](docker/Dockerfile). Both agents get them.
+</details>
+
+<details>
+<summary><b>How AGENTS.md reaches agent A</b></summary>
+<br>
+
+Recent Claude Code versions read `AGENTS.md` natively when a project has **no** `CLAUDE.md`, so agent A only gets `AGENTS.md` in its workspace root.
+
+When copying an existing project, the script removes every `AGENTS.md`, `CLAUDE.md` and `CLAUDE.local.md` from **both** copies, so neither agent sees other instructions. With `--keep-instruction-files`, those files are kept in both copies. The root AGENTS.md is still replaced for A and removed for B. A kept root CLAUDE.md would stop Claude Code from loading AGENTS.md, so in that case `@AGENTS.md` is added to A's CLAUDE.md. `--claude-md-bridge always|never` overrides this.
+
+> [!CAUTION]
+> If the project is a git repository and those files are committed, an agent could still find them through git history. The script warns you when this applies.
+
+</details>
+
+<details>
+<summary><b>Customizing the sandbox</b></summary>
+<br>
+
+Both agents use the image built from [docker/Dockerfile](docker/Dockerfile): Node 22, Python 3, git, ripgrep, build tools and Claude Code. Agents run as a non-root user with `--dangerously-skip-permissions` inside the container. Add any toolchains your projects need (Go, Rust, Java, ...) to the Dockerfile. Both agents get them.
+
+</details>
