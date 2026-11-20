@@ -11,7 +11,7 @@ Run two Claude Code agents side by side, one with your `AGENTS.md` and one witho
 ![Claude Code](https://img.shields.io/badge/agent-Claude%20Code-D97757?logo=anthropic&logoColor=white)
 ![Trivy](https://img.shields.io/badge/security%20scan-Trivy-1904DA)
 
-[How it works](#-how-it-works) · [Quick start](#-quick-start) · [Workflow](#-workflow) · [Security scan](#-security-scan-with-trivy) · [Output](#-output) · [Options](#%EF%B8%8F-options)
+[How it works](#-how-it-works) · [Quick start](#-quick-start) · [Agent folders](#%EF%B8%8F-agent-folders) · [Workflow](#-workflow) · [Security scan](#-security-scan-with-trivy) · [Output](#-output) · [Options](#%EF%B8%8F-options)
 
 </div>
 
@@ -23,6 +23,7 @@ Run two Claude Code agents side by side, one with your `AGENTS.md` and one witho
 |---|---|
 | 🅰️🅱️ **Controlled comparison** | The two agents share the same image, Claude Code version, model, prompts and project. The only difference is the `AGENTS.md`. |
 | 🐳 **Isolated sandboxes** | Each agent runs in its own Docker container on its own network. No host folders are mounted. |
+| 🗂️ **Agent folders** | Give each agent its own `.claude/` folder (AGENTS.md, skills, settings, ...) from `inputs/agent_a` and `inputs/agent_b`. |
 | 🆕 **New or existing projects** | Start from an empty folder, or copy an existing codebase into both workspaces. |
 | 💬 **Follow-up prompts** | Send evaluation questions to both agents or to one of them. Each agent continues its own conversation. |
 | 📦 **Workspace export** | Copy both workspaces to your machine to inspect or diff them. |
@@ -47,10 +48,10 @@ Agent A gets the `AGENTS.md` in its workspace root, which is how it is used in r
 CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-...
 ```
 
-**2. Run the example** from [inputs/](inputs/): a secure-coding [AGENTS.md](inputs/AGENTS.md) and a FastAPI development prompt.
+**2. Run the example** from [inputs/](inputs/): agent A gets a secure-coding [AGENTS.md](inputs/agent_a/.claude/AGENTS.md) and both agents get a FastAPI development prompt.
 
 ```bash
-python agentsmd_tester.py --mode new --agents-md inputs/AGENTS.md --prompt-file inputs/1.develop.md --model opus
+python agentsmd_tester.py --mode new --prompt-file inputs/1.develop.md --model opus
 ```
 
 **3. Evaluate.** When both agents finish, use the menu to send an evaluation prompt, copy the workspaces and run a Trivy scan.
@@ -74,6 +75,30 @@ OAuth refresh tokens can be used only once. When `.credentials.json` is used, th
 
 `.env/`, `*.env` and `runs/` are git-ignored.
 </details>
+
+## 🗂️ Agent folders
+
+Everything in an agent folder is copied into that agent's workspace root, on top of the project. So `inputs/agent_a/.claude/` becomes `/workspace/.claude/` in container A, which is where Claude Code reads project instructions and skills.
+
+```text
+inputs/
+├── 1.develop.md                    prompt
+├── agent_a/                        → copied into agent A's /workspace
+│   └── .claude/
+│       ├── AGENTS.md               instructions under test
+│       ├── skills/<name>/SKILL.md  project skills (optional)
+│       └── settings.json, ...      anything else Claude Code reads from .claude/
+└── agent_b/                        → copied into agent B's /workspace (baseline)
+    └── .claude/
+```
+
+- `inputs/agent_a` and `inputs/agent_b` are used by default when they exist. Use `--agent-a-dir` / `--agent-b-dir` to point at other folders, or `--no-agent-dirs` to ignore them.
+- `--agents-md FILE` still works. It puts the file at the root of A's workspace and is optional when A's folder already has an AGENTS.md.
+- To test an AGENTS.md alone, leave `agent_b/.claude/` empty. To test skills or settings, give both agents the same AGENTS.md and change only the skills or settings in one folder.
+- `.gitkeep` files are not copied. A copy of both folders is saved in each run under `runs/<run>/inputs/`.
+
+> [!TIP]
+> Put only what you want the agent to see in its folder: every file in it becomes part of that agent's workspace.
 
 ## 🔄 Workflow
 
@@ -100,8 +125,8 @@ A session looks like this:
 
 What next?
   1) Send a prompt to BOTH agents
-  2) Send a prompt to agent A only (with AGENTS.md)
-  3) Send a prompt to agent B only (baseline)
+  2) Send a prompt to agent A only
+  3) Send a prompt to agent B only
   4) Copy both workspaces to the host
   5) Scan the copied workspaces with Trivy
   6) Show results summary
@@ -150,7 +175,8 @@ Everything is saved under `runs/<timestamp>/`:
 
 ```text
 runs/20261120-105014/
-├── AGENTS.under-test.md          copy of the tested file
+├── inputs/agent_a · agent_b/      copies of the agent folders used
+├── AGENTS.under-test.md          copy of --agents-md (if given)
 ├── prompts.md                    every prompt sent, per round
 ├── run.json · summary.md         per-turn metrics, final responses, Trivy counts
 ├── agent_a/ · agent_b/
@@ -170,7 +196,9 @@ runs/20261120-105014/
 
 | Option | Purpose |
 |---|---|
-| `--agents-md PATH` | AGENTS.md under test (given to agent A only) |
+| `--agents-md PATH` | AGENTS.md under test, placed at the root of A's workspace (optional when A's folder has one) |
+| `--agent-a-dir DIR` · `--agent-b-dir DIR` | [agent folders](#%EF%B8%8F-agent-folders) copied into each workspace (default: `inputs/agent_a`, `inputs/agent_b`) |
+| `--no-agent-dirs` | ignore the default agent folders |
 | `--mode new\|existing` · `--project DIR` | start from scratch, or copy an existing project into both workspaces |
 | `--prompt TEXT` · `--prompt-file PATH` | initial prompt |
 | `--model opus` | pin the model for both agents (recommended for reproducibility) |
@@ -179,7 +207,7 @@ runs/20261120-105014/
 | `--timeout 30` | per-prompt timeout in minutes |
 | `--max-turns N` | limit agentic turns per prompt |
 | `--exclude NAME` | extra file/dir name not copied in (`node_modules`, `.venv`, `__pycache__`, ... are always skipped) |
-| `--keep-instruction-files` | keep the project's own CLAUDE.md / nested AGENTS.md files in both copies |
+| `--keep-instruction-files` | keep the project's own CLAUDE.md / nested AGENTS.md files in both copies (a root or `.claude/` AGENTS.md is always removed) |
 | `--claude-md-bridge auto\|always\|never` | add `@AGENTS.md` to A's root CLAUDE.md (see below) |
 | `--memory 4g --cpus 2` | resource limits per container |
 | `--keep-containers` | keep the containers after exit (`docker exec -it <name> bash`) |
@@ -195,9 +223,11 @@ runs/20261120-105014/
 <summary><b>How AGENTS.md reaches agent A</b></summary>
 <br>
 
-Recent Claude Code versions read `AGENTS.md` natively when a project has **no** `CLAUDE.md`, so agent A only gets `AGENTS.md` in its workspace root.
+Recent Claude Code versions read `AGENTS.md` and `.claude/AGENTS.md` natively when a project has **no** `CLAUDE.md`. Agent A gets the file from its agent folder (usually `.claude/AGENTS.md`) or from `--agents-md` (workspace root), with nothing else added.
 
-When copying an existing project, the script removes every `AGENTS.md`, `CLAUDE.md` and `CLAUDE.local.md` from **both** copies, so neither agent sees other instructions. With `--keep-instruction-files`, those files are kept in both copies. The root AGENTS.md is still replaced for A and removed for B. A kept root CLAUDE.md would stop Claude Code from loading AGENTS.md, so in that case `@AGENTS.md` is added to A's CLAUDE.md. `--claude-md-bridge always|never` overrides this.
+When copying an existing project, the script removes every `AGENTS.md`, `CLAUDE.md` and `CLAUDE.local.md` from **both** copies, so neither agent sees other instructions. With `--keep-instruction-files`, those files are kept in both copies, except a root or `.claude/` AGENTS.md, which is always removed so it can't reach agent B. Agent folders are copied after the project, so their files replace project files with the same path.
+
+A CLAUDE.md in A's workspace, kept from the project or coming from A's folder, would stop Claude Code from loading AGENTS.md. In that case the script adds an import (`@AGENTS.md` or `@.claude/AGENTS.md`) to A's root CLAUDE.md. `--claude-md-bridge always|never` overrides this.
 
 > [!CAUTION]
 > If the project is a git repository and those files are committed, an agent could still find them through git history. The script warns you when this applies.
