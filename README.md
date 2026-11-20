@@ -154,13 +154,13 @@ What next?
 After you copy the workspaces, the script offers to scan them with [Trivy](https://trivy.dev). Trivy runs from the pinned `aquasec/trivy` Docker image, so you don't need to install it. Each workspace is mounted **read-only**, and the vulnerability database is cached in a Docker volume.
 
 ```text
-Workspace  Kind               CRITICAL  HIGH  MEDIUM  LOW  UNKNOWN  Total
-agent_a    Vulnerabilities    0         0     0       0    0        0
-agent_a    Secrets            0         0     0       0    0        0
-agent_a    Misconfigurations  0         0     0       0    0        0
-agent_b    Vulnerabilities    0         4     4       1    0        9
-agent_b    Secrets            1         0     0       0    0        1
-agent_b    Misconfigurations  0         1     0       1    0        2
+Workspace  Kind               CRITICAL  HIGH  MEDIUM  LOW  UNKNOWN  Total  Scanned
+agent_a    Vulnerabilities    -         -     -       -    -        -      Unable to scan: requirements.txt without pinned versions or lockfile
+agent_a    Secrets            0         0     0       0    0        0      all files
+agent_a    Misconfigurations  -         -     -       -    -        -      Unable to scan: no Dockerfile, Kubernetes, Terraform or similar files
+agent_b    Vulnerabilities    0         4     4       1    0        9      12 package(s) in requirements.txt
+agent_b    Secrets            1         0     0       0    0        1      all files
+agent_b    Misconfigurations  0         1     0       1    0        2      1 config file(s): Dockerfile
 ```
 
 | Scanner | Finds |
@@ -175,8 +175,10 @@ To scan workspaces from an earlier run (no credentials needed):
 python agentsmd_tester.py --scan-only runs/<run>/workspaces/after_round_01
 ```
 
-> [!IMPORTANT]
-> Trivy finds dependency vulnerabilities only when versions are **pinned**, in a lockfile or with `==` in `requirements.txt`. "0 vulnerabilities" can also mean "nothing to check".
+The **Scanned** column shows what each scanner actually checked. When a scanner had nothing to check, its counts show `-` and the reason is given as **Unable to scan**, instead of a `0` that would look clean. For example, Trivy can only check dependencies with **pinned** versions (in a lockfile, or with `==` in `requirements.txt`), and only finds misconfigurations in files such as Dockerfiles. Secrets are checked in every file.
+
+> [!NOTE]
+> If only some dependencies are pinned, the unpinned ones are not checked. The package count in **Scanned** shows how many were checked.
 
 ## 📁 Output
 

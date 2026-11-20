@@ -466,6 +466,10 @@ TRIVY_IMAGE = "aquasec/trivy:0.76.2"
 TRIVY_CACHE_VOLUME = "agentsmd-trivy-cache"  # keeps the vulnerability DB between scans
 TRIVY_KINDS = [("vuln", "Vulnerabilities"), ("secret", "Secrets"), ("misconfig", "Misconfigurations")]
 SEVERITIES = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
+# Dependency manifests, used to explain why no packages could be checked.
+DEPENDENCY_FILES = {"pyproject.toml", "setup.py", "setup.cfg", "Pipfile", "package.json", "go.mod",
+                    "Cargo.toml", "pom.xml", "build.gradle", "build.gradle.kts", "Gemfile", "composer.json"}
+UNABLE = "Unable to scan"
 
 
 def ensure_image(console: Console, image: str) -> None:
@@ -481,6 +485,7 @@ def trivy_scan(workspace: Path, args: argparse.Namespace, skip_reports: bool = F
     cmd = ["docker", "run", "--rm", "-v", f"{TRIVY_CACHE_VOLUME}:/root/.cache",
            "--mount", f'type=bind,"source={source}",target=/scan,readonly',
            args.trivy_image, "fs", "--quiet", "--format", "json",
+           "--list-all-pkgs",  # lets us tell "0 vulnerabilities" from "no packages checked"
            "--scanners", args.trivy_scanners]
     if args.trivy_severity:
         cmd += ["--severity", args.trivy_severity]
@@ -518,6 +523,40 @@ def trivy_findings(report: dict) -> list[dict]:
     return findings
 
 
+def find_dependency_files(workspace: Path, skip_reports: bool) -> list[str]:
+    found = []
+    for dirpath, dirnames, filenames in os.walk(workspace):
+        at_root = Path(dirpath) == workspace
+        dirnames[:] = [d for d in dirnames
+                       if d not in HEAVY_DIRS and d != ".git" and not (skip_reports and at_root and d == "trivy")]
+        found += [(Path(dirpath) / f).relative_to(workspace).as_posix() for f in filenames
+                  if f in DEPENDENCY_FILES or (f.startswith("requirements") and f.endswith(".txt"))]
+    return sorted(found)
+
+
+def trivy_coverage(report: dict, workspace: Path, skip_reports: bool) -> dict[str, dict]:
+    """What each scanner actually examined. A scanner with nothing to examine reports 0 findings,
+    which would wrongly read as "clean", so it is flagged as not scanned instead."""
+    results = report.get("Results") or []
+    pkg_results = [r for r in results if r.get("Class") in ("lang-pkgs", "os-pkgs") and r.get("Packages")]
+    n_pkgs = sum(len(r["Packages"]) for r in pkg_results)
+    configs = [r.get("Target") for r in results if r.get("Class") == "config"]
+
+    if n_pkgs:
+        vuln = {"scanned": True,
+                "note": f"{n_pkgs} package(s) in {', '.join(r.get('Target', '?') for r in pkg_results)}"}
+    else:
+        deps = find_dependency_files(workspace, skip_reports)
+        reason = (f"{', '.join(deps[:3])}{' ...' if len(deps) > 3 else ''} without pinned versions or lockfile"
+                  if deps else "no dependency files")
+        vuln = {"scanned": False, "note": f"{UNABLE}: {reason}"}
+    misconfig = ({"scanned": True, "note": f"{len(configs)} config file(s): {', '.join(configs[:3])}"
+                                           f"{' ...' if len(configs) > 3 else ''}"}
+                 if configs else
+                 {"scanned": False, "note": f"{UNABLE}: no Dockerfile, Kubernetes, Terraform or similar files"})
+    return {"vuln": vuln, "secret": {"scanned": True, "note": "all files"}, "misconfig": misconfig}
+
+
 def severity_counts(findings: list[dict]) -> dict[str, dict[str, int]]:
     counts = {kind: {s: 0 for s in SEVERITIES} for kind, _ in TRIVY_KINDS}
     for f in findings:
@@ -536,23 +575,31 @@ def scan_workspaces(console: Console, export_dir: Path, args: argparse.Namespace
 
     console.header(f"Trivy scan ({args.trivy_image}, scanners: {args.trivy_scanners})")
     results: dict[str, list[dict]] = {}
+    coverage: dict[str, dict[str, dict]] = {}
     for ws in targets:
         console.print(f"Scanning {ws.name} ... (the first scan downloads the vulnerability DB)")
-        raw = trivy_scan(ws, args, skip_reports=ws == export_dir)
+        skip_reports = ws == export_dir
+        raw = trivy_scan(ws, args, skip_reports=skip_reports)
         (report_dir / f"{ws.name}.json").write_bytes(raw)
-        results[ws.name] = trivy_findings(json.loads(raw or b"{}"))
+        report = json.loads(raw or b"{}")
+        results[ws.name] = trivy_findings(report)
+        coverage[ws.name] = trivy_coverage(report, ws, skip_reports)
 
-    headers = ["Workspace", "Kind", *SEVERITIES, "Total"]
+    headers = ["Workspace", "Kind", *SEVERITIES, "Total", "Scanned"]
     rows = []
     summary: dict[str, dict] = {}
     for name, findings in results.items():
         counts = severity_counts(findings)
-        summary[name] = counts
+        summary[name] = {"counts": counts, "coverage": coverage[name]}
         for kind, label in TRIVY_KINDS:
             if kind not in args.trivy_scanners:
                 continue
-            row = counts[kind]
-            rows.append([name, label, *(str(row[s]) for s in SEVERITIES), str(sum(row.values()))])
+            row, cov = counts[kind], coverage[name][kind]
+            if cov["scanned"]:
+                cells = [*(str(row[s]) for s in SEVERITIES), str(sum(row.values()))]
+            else:  # nothing was checked: "0" would wrongly read as clean
+                cells = ["-"] * (len(SEVERITIES) + 1)
+            rows.append([name, label, *cells, cov["note"]])
 
     table = [headers] + rows
     widths = [max(len(r[i]) for r in table) for i in range(len(headers))]
@@ -563,9 +610,14 @@ def scan_workspaces(console: Console, export_dir: Path, args: argparse.Namespace
           f"- Image: `{args.trivy_image}`", f"- Scanners: {args.trivy_scanners}",
           f"- Severity filter: {args.trivy_severity or 'all'}", "",
           "| " + " | ".join(headers) + " |", "|" + "---|" * len(headers)]
-    md += ["| " + " | ".join(r) + " |" for r in rows]
+    md += ["| " + " | ".join(c.replace("|", "/") for c in r) + " |" for r in rows]
+    md += ["", f"`-` / *{UNABLE}*: the scanner found nothing it could check, so no result is given. "
+           "Dependency vulnerabilities need pinned versions or a lockfile."]
     for name, findings in results.items():
         md += ["", f"## {name} ({len(findings)} findings)", ""]
+        md += [f"- {label}: {coverage[name][kind]['note']}" for kind, label in TRIVY_KINDS
+               if kind in args.trivy_scanners]
+        md.append("")
         if findings:
             md += ["| Severity | Kind | ID | Target | Detail |", "|---|---|---|---|---|"]
             md += [f"| {f['severity']} | {f['kind']} | {f['id']} | `{f['target']}` | "
