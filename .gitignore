@@ -1,0 +1,13 @@
+# Agent credentials - never commit
+.env/
+.env
+*.env
+
+# Run outputs (logs, transcripts, copied workspaces)
+runs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
